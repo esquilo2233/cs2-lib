@@ -523,10 +523,12 @@ export class ItemGenerator {
                     base,
                     baseId,
                     id,
-                    image: this.itemManager.get(id)?.image ?? this.getImage(id, image_inventory, ""),
+                    image: this.itemManager.get(id)?.iomage ?? this.getWeaponComponentImage(id, image_inventory, ""),
                     index: Number(newIndexItem),
                     rarity: rarityColorHex,
                     componentName: component[1],
+                    wearMax: paintKit.wearMax !== undefined ? Number(paintKit.wearMax) : CS2_DEFAULT_MAX_WEAR,
+                    wearMin: paintKit.wearMin !== undefined ? Number(paintKit.wearMin) : CS2_DEFAULT_MIN_WEAR,
                     parentPaintkitId: paintKit?.index,
                     type: CS2ItemType.WeaponComponent
                 });
@@ -1353,19 +1355,33 @@ export class ItemGenerator {
         return this.getImage(id, `econ/weapons/base_weapons/${className}`);
     }
 
-    private getSkinImage(id: number, className: string | undefined, paintClassName: string | undefined) {
-        const paths = PAINT_IMAGE_SUFFIXES.map((suffix) => [
+    private getSkinImage(id: number, className: string | undefined, paintClassName: string | undefined, suffix: string = "_png") {
+        const paths = PAINT_IMAGE_SUFFIXES.map((wearSuffix) => [
             resolve(
                 IMAGES_PATH,
-                `econ/default_generated/${className}_${paintClassName}_${suffix}_png.png`.toLowerCase()
+                `econ/default_generated/${className}_${paintClassName}_${wearSuffix}${suffix}.png`.toLowerCase()
             ),
-            resolve(process.cwd(), `assets/images/${id}_${suffix}.png`)
+            resolve(process.cwd(), `assets/images/${id}_${wearSuffix}.png`)
         ]);
         for (const [src, dest] of paths) {
             copyFileSync(src, dest);
         }
-        return this.getImage(id, paths[0][0].replace("_png.png", ""));
+        return this.getImage(id, paths[0][0].replace(`${suffix}.png`, ""), suffix);
     }
+    private getWeaponComponentImage(id: number, path: string, suffix: string = "_png") {
+        const paths = PAINT_IMAGE_SUFFIXES.map((wearSuffix) => [
+            resolve(
+                IMAGES_PATH,
+                `${path}_${wearSuffix}${suffix}.png`.toLowerCase()
+            ),
+            resolve(process.cwd(), `assets/images/${id}_${wearSuffix}.png`)
+        ]);
+        for (const [src, dest] of paths) {
+            copyFileSync(src, dest);
+        }
+        return this.getImage(id, paths[0][0].replace(`${suffix}.png`, ""), suffix);
+    }
+
     private getCustomToolImage(id: number, itemName: string | undefined) {
         const paths = PAINT_IMAGE_SUFFIXES.map((suffix) => [
             resolve(
@@ -1375,6 +1391,7 @@ export class ItemGenerator {
             resolve(process.cwd(), `assets/images/${id}_${suffix}.png`)
         ]);
         for (const [src, dest] of paths) {
+            console.log(src)
             copyFileSync(src, dest);
         }
         return this.getImage(id, paths[0][0].replace("_png.png", ""));
