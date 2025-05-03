@@ -9,6 +9,7 @@ import { warn } from "console";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { assert } from "../src/utils";
+import { CS2_CSGO_DIRECTORY_PATH, INPUT_FORCE } from "./env";
 import { exists, log, readProcess, shouldRun, warning } from "./utils";
 
 const cwd = process.cwd();
@@ -20,7 +21,7 @@ const workdirPath = join(cwd, "scripts/workdir");
 const gamePath = join(workdirPath, "game");
 const decompiledPath = join(workdirPath, "decompiled");
 const csgoPackageFilelistPath = join(workdirPath, "csgo_packages.depot");
-const csgoDirectoryPath = join(workdirPath, "game/csgo/pak01_dir.vpk");
+const csgoDirectoryPath = CS2_CSGO_DIRECTORY_PATH ?? join(workdirPath, "game/csgo/pak01_dir.vpk");
 const extractDirectories = ["panorama/", "resource/", "scripts/", "soundevents/"];
 
 async function getLatestCsgoManifest() {
@@ -111,7 +112,7 @@ async function checkCsgoPackageDirectory() {
         warning(`Failed to get latest manifest for depot ${DEPOT_ID}`);
         return false;
     }
-    if (manifest === latestManifest) {
+    if (INPUT_FORCE !== "true" && manifest === latestManifest) {
         warning(`Depot ${DEPOT_ID} is up to date`);
         return false;
     }
@@ -167,11 +168,12 @@ async function extractCsgoPackageFiles() {
 }
 
 export async function main() {
-    if (await checkCsgoPackageDirectory()) {
-        if (await downloadCsgoPackageFiles()) {
-            if (await extractCsgoPackageFiles()) {
-                log("Downloaded CS2 files successfully");
-            }
+    if (
+        CS2_CSGO_DIRECTORY_PATH !== undefined ||
+        ((await checkCsgoPackageDirectory()) && (await downloadCsgoPackageFiles()))
+    ) {
+        if (await extractCsgoPackageFiles()) {
+            log("Downloaded CS2 files successfully");
         }
     } else {
         warn("CS2 files are up to date");

@@ -3,43 +3,51 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import {copyFileSync, existsSync, readFileSync} from "fs";
-import {readdir, readFile} from "fs/promises";
-import {resolve} from "path";
-import {stripHtml} from "string-strip-html";
-import {format} from "util";
-import {CS2_DEFAULT_MAX_WEAR, CS2_DEFAULT_MIN_WEAR} from "../src/economy-constants.js";
-import {CS2RarityColorValues} from "../src/economy-container.js";
+import { copyFileSync, existsSync, readFileSync } from "fs";
+import { readFile, readdir, unlink } from "fs/promises";
+import { resolve } from "path";
+import sharp from "sharp";
+import { stripHtml } from "string-strip-html";
+import { format } from "util";
+import { CS2_DEFAULT_MAX_WEAR, CS2_DEFAULT_MIN_WEAR } from "../src/economy-constants.js";
+import { CS2RarityColorValues } from "../src/economy-container.js";
 import {
     CS2ContainerType,
+    CS2ItemTeam,
     CS2ItemLocalization,
     CS2ItemLocalizationByLanguage,
     CS2ItemTeam,
     CS2ItemType,
     CS2ItemTypeValues
-} from "../src/economy-types.js";
-import {CS2KeyValues} from "../src/keyvalues.js";
-import {assert, ensure, fail, isNotUndefined} from "../src/utils.js";
-import {ContainerScraper} from "./container-scraper.js";
-import {CS2_CSGO_PATH} from "./env.js";
-import {HARDCODED_SPECIALS} from "./item-generator-specials.js";
-import {useItemsTemplate} from "./item-generator-templates.js";
-import {CS2ExportItem, CS2ExtendedItem, CS2GameItems, CS2Language} from "./item-generator-types.js";
-import {prependHash, readJson, shouldRun, warning, write, writeJson} from "./utils.js";
-import {BlueprintCase} from "./blueprint-case";
 
+} from "../src/economy-types.js";
+import { CS2KeyValues } from "../src/keyvalues.js";
+import { CS2KeyValues3 } from "../src/keyvalues3.js";
+import { assert, ensure, fail, isNotUndefined } from "../src/utils.js";
+import { ContainerScraper } from "./container-scraper.js";
+import { CS2_CSGO_PATH } from "./env.js";
+import { ExternalCS2 } from "./external-cs2.js";
+import { HARDCODED_SPECIALS } from "./item-generator-specials.js";
+import { useItemsTemplate, useStickerMarkupTemplate, useLocalizationTemplate } from "./item-generator-templates.js";
+import { CS2ExportItem, CS2ExtendedItem, CS2GameItems, CS2Language } from "./item-generator-types.js";
+import { exists, prependHash, readJson, shouldRun, warning, write, writeJson } from "./utils.js";
+import {BlueprintCase} from "./blueprint-case";
 const AGENTS_SOUNDEVENTS_PATH = resolve(CS2_CSGO_PATH, "soundevents/vo/agents");
 const IMAGES_PATH = resolve(CS2_CSGO_PATH, "panorama/images");
 const ITEMS_GAME_PATH = resolve(CS2_CSGO_PATH, "scripts/items/items_game.txt");
 const ITEMS_GAME_CUSTOM_PATH = resolve(CS2_CSGO_PATH, "scripts/items/items_game_custom.txt");
 const RESOURCE_PATH = resolve(CS2_CSGO_PATH, "resource");
+const DECOMPILED_PATH = resolve(process.cwd(), "scripts/workdir/decompiled");
 
 const ITEM_IDS_JSON_PATH = "assets/data/items-ids.json";
 const ITEMS_GAME_JSON_PATH = "assets/data/items-game.json";
 const ITEMS_GAME_CUSTOM_JSON_PATH = "assets/data/items-game-custom.json";
 const ITEMS_JSON_PATH = "assets/data/items.json";
 const ITEMS_TS_PATH = "src/items.ts";
+const STICKER_MARKUP_JSON_PATH = "assets/data/sticker-markup.json";
+const STICKER_MARKUP_TS_PATH = "src/sticker-markup.ts";
 const LOCALIZATIONS_JSON_PATH = "assets/localizations/items-%s.json";
+const LOCALIZATIONS_TS_PATH = "src/LocalizATIONS/%s.ts";
 const PARSED_ITEMS_GAME_PATH = "assets/data/parsed-items-game.json";
 
 const FORMATTED_STRING_RE = /%s(\d+)/g;
@@ -94,6 +102,7 @@ export class DefaultGraffitiManager {
 }
 
 export class ItemGenerator {
+    gameItemsAsText: string;
     gameItems: CS2GameItems["items_game"] = null!;
     gameItemsCustom: CS2GameItems["items_game"] = null!;
 
@@ -110,15 +119,20 @@ export class ItemGenerator {
     private defaultGraffitiManager = new DefaultGraffitiManager();
     private itemIdentifierManager = new ItemIdentifierManager();
     private itemManager = new ItemManager();
+    private cs2 = new ExternalCS2();
 
     private baseItems: CS2ExtendedItem[] = [];
     private containerItems = new Map<string, number>();
     private items = new Map<number, CS2ExtendedItem>();
 
+    private stickerMarkup: CS2StickerMarkup = {};
+
     private paintKits: {
         className: string;
+        compositeMaterialPath?: string;
         descToken?: string;
         index: number;
+        isLegacy: boolean;
         nameToken: string;
         rarityColorHex: string;
         wearMax: number;
@@ -144,11 +158,11 @@ export class ItemGenerator {
         await this.readCsgoLanguageFiles();
         await this.readItemsGameFile();
         await this.readItemsGameCustomFile();
-        this.parseBaseWeapons();
+        await this.parseBaseWeapons();
         this.parseBaseMelees();
         this.parseBaseGloves();
+        await this.parseSkins();
         this.parseCustomWeaponSets();
-        this.parseSkins();
         this.parseMusicKits();
         this.parseStickers();
         this.parseKeychains();
@@ -192,7 +206,7 @@ export class ItemGenerator {
                     })
             )
         );
-        const {length} = Object.keys(this.csgoLocalizationByLanguage);
+        const { length } = Object.keys(this.csgoLocalizationByLanguage);
         assert(length > 0);
         assert(this.csgoLocalizationByLanguage.english !== undefined);
         warning(`Loaded ${length} languages.`);
@@ -226,9 +240,10 @@ export class ItemGenerator {
     }
 
     async readItemsGameFile() {
-        this.gameItems = CS2KeyValues.parse<CS2GameItems>(await readFile(ITEMS_GAME_PATH, "utf-8")).items_game;
+        this.gameItemsAsText = await readFile(ITEMS_GAME_PATH, "utf-8");
+        this.gameItems = CS2KeyValues.parse<CS2GameItems>(this.gameItemsAsText).items_game;
         this.raritiesColorHex = Object.fromEntries(
-            Object.entries(this.gameItems.rarities).map(([rarityKey, {color}]) => {
+            Object.entries(this.gameItems.rarities).map(([rarityKey, { color }]) => {
                 return [rarityKey, ensure(this.gameItems.colors[ensure(color)]?.hex_color)] as const;
             })
         );
@@ -238,7 +253,8 @@ export class ItemGenerator {
         this.paintKitsRaritiesColorHex = Object.fromEntries(
             Object.entries(this.gameItems.paint_kits_rarity).map(([paintKitKey, rarityKey]) => {
                 return [paintKitKey, this.raritiesColorHex[rarityKey]] as const;
-            }));
+            })
+        );
         const rarityKeys = Object.keys(this.raritiesColorHex);
         this.itemsRaritiesColorHex = Object.fromEntries(
             // Mapping rarities for items inside loot lists. Looks like this is
@@ -249,45 +265,58 @@ export class ItemGenerator {
                     const rarityKey = rarityKeys.find((rarityKey) => clientLootListKey.includes(`_${rarityKey}`));
                     return rarityKey !== undefined
                         ? Object.keys(clientLootList)
-                            .map((itemOrClientLootListKey) =>
-                                itemOrClientLootListKey.includes("customplayer_") ||
-                                LOOT_ITEM_RE.test(itemOrClientLootListKey)
-                                    ? ([itemOrClientLootListKey, this.raritiesColorHex[rarityKey]] as const)
-                                    : undefined
-                            )
-                            .filter(isNotUndefined)
+                              .map((itemOrClientLootListKey) =>
+                                  itemOrClientLootListKey.includes("customplayer_") ||
+                                  LOOT_ITEM_RE.test(itemOrClientLootListKey)
+                                      ? ([itemOrClientLootListKey, this.raritiesColorHex[rarityKey]] as const)
+                                      : undefined
+                              )
+                              .filter(isNotUndefined)
                         : undefined;
                 })
                 .filter(isNotUndefined)
                 .flat()
         );
         this.paintKits = Object.entries(this.gameItems.paint_kits)
-            .map(([paintKitIndex, {description_tag, description_string, name, wear_remap_max, wear_remap_min}]) => {
-                assert(name);
-                if (name === "default" || description_tag === undefined) {
-                    return undefined;
+            .map(
+                ([
+                    paintKitIndex,
+                    {
+                        composite_material_path,
+                        description_string,
+                        description_tag,
+                        name,
+                        use_legacy_model,
+                        wear_remap_max,
+                        wear_remap_min
+                    }
+                ]) => {
+                    assert(name);
+                    if (name === "default" || description_tag === undefined) {
+                        return undefined;
+                    }
+                    return {
+                        className: name,
+                        compositeMaterialPath: composite_material_path,
+                        descToken: prependHash(description_string),
+                        index: Number(paintKitIndex),
+                        isLegacy: use_legacy_model === "1",
+                        nameToken: prependHash(description_tag),
+                        rarityColorHex: this.getRarityColorHex([name]),
+                        wearMax: wear_remap_max !== undefined ? Number(wear_remap_max) : CS2_DEFAULT_MAX_WEAR,
+                        wearMin: wear_remap_min !== undefined ? Number(wear_remap_min) : CS2_DEFAULT_MIN_WEAR
+                    };
                 }
-                return {
-                    className: name,
-                    descToken: prependHash(description_string),
-                    index: Number(paintKitIndex),
-                    nameToken: prependHash(description_tag),
-                    rarityColorHex: this.getRarityColorHex([name]),
-                    wearMax: wear_remap_max !== undefined ? Number(wear_remap_max) : CS2_DEFAULT_MAX_WEAR,
-                    wearMin: wear_remap_min !== undefined ? Number(wear_remap_min) : CS2_DEFAULT_MIN_WEAR
-                };
-            })
+            )
             .filter(isNotUndefined);
-
-
-        this.graffitiTints = Object.values(this.gameItems.graffiti_tints).map(({id}) => ({
+        this.graffitiTints = Object.values(this.gameItems.graffiti_tints).map(({ id }) => ({
             id: Number(id),
-            name: this.requireTranslation(`#Attrib_SprayTintValue_${id}`),
+            name: this.requireLocalization(`#Attrib_SprayTintValue_${id}`),
             nameToken: `#Attrib_SprayTintValue_${id}`
         }));
         this.itemSetItemKey = Object.fromEntries(
             Object.entries(this.gameItems.item_sets)
-                .map(([itemSetKey, {items}]) => {
+                .map(([itemSetKey, { items }]) => {
                     this.getCollectionImage(itemSetKey);
                     return Object.keys(items).map((itemKey) => [itemKey, itemSetKey] as const);
                 })
@@ -295,9 +324,9 @@ export class ItemGenerator {
         );
     }
 
-    private parseBaseWeapons() {
+    private async parseBaseWeapons() {
         warning("Parsing base weapons...");
-        for (const [itemDef, {baseitem, flexible_loadout_slot, name, prefab, image_inventory}] of Object.entries(
+        for (const [itemDef, { baseitem, flexible_loadout_slot, name, prefab, image_inventory }] of Object.entries(
             this.gameItems.items
         )) {
             if (baseitem !== "1" || flexible_loadout_slot === undefined) {
@@ -307,7 +336,7 @@ export class ItemGenerator {
             if (category === undefined || (category === "equipment" && !BASE_WEAPON_EQUIPMENT.includes(name))) {
                 continue;
             }
-            const {used_by_classes, item_name, item_description} = this.getPrefab(prefab);
+            const { used_by_classes, item_name, item_description, model_player } = this.getPrefab(prefab);
             const teams = this.getTeams(used_by_classes);
             const id = this.itemIdentifierManager.get(`weapon_${this.getTeamsString(used_by_classes)}_${itemDef}`);
             this.addTranslation(id, "name", item_name);
@@ -319,6 +348,7 @@ export class ItemGenerator {
                 def: Number(itemDef),
                 descToken: item_description,
                 free: true,
+                glb: (await exists(resolve(process.cwd(), `assets/models/${itemDef}.glb`))) || undefined,
                 id,
                 image: image_inventory !== undefined ? this.getImage(id, image_inventory) : this.getBaseImage(id, name),
                 index: undefined,
@@ -328,6 +358,7 @@ export class ItemGenerator {
                 teams,
                 type: CS2ItemType.Weapon
             });
+            await this.findStickerMarkup(itemDef, model_player);
         }
     }
 
@@ -335,7 +366,7 @@ export class ItemGenerator {
         warning("Parsing base melee...");
         for (const [
             itemDef,
-            {item_name, image_inventory, item_description, name, used_by_classes, prefab, baseitem}
+            { item_name, image_inventory, item_description, name, used_by_classes, prefab, baseitem }
         ] of Object.entries(this.gameItems.items)) {
             if (
                 item_name === undefined ||
@@ -375,7 +406,7 @@ export class ItemGenerator {
         warning("Parsing base gloves...");
         for (const [
             itemDef,
-            {item_name, baseitem, name, prefab, image_inventory, item_description, used_by_classes}
+            { item_name, baseitem, name, prefab, image_inventory, item_description, used_by_classes }
         ] of Object.entries(this.gameItems.items)) {
             if (item_name === undefined || !prefab?.includes("hands") || used_by_classes === undefined) {
                 continue;
@@ -416,9 +447,9 @@ export class ItemGenerator {
                 icon_path.includes(`/${className}_${paintKit.className}`)
             );
             if (baseItem === undefined) {
-                continue;
-            }
-            const itemKey = `[${paintKit.className}]${baseItem.className}`;
+                    continue;
+                }
+                const itemKey = `[${paintKit.className}]${baseItem.className}`;
             const id = this.itemIdentifierManager.get(`paint_${baseItem.def}_${paintKit.index}`);
             const legacy = this.itemManager.get(id)?.legacy;
             this.addContainerItem(itemKey, id);
@@ -450,8 +481,8 @@ export class ItemGenerator {
         warning("Parsing skins...");
         for (const {icon_path} of Object.values(this.gameItems.alternate_icons2.weapon_icons)) {
             if (!LIGHT_ICON_RE.test(icon_path)) {
-                continue;
-            }
+                    continue;
+                }
             const paintKit = this.paintKits.find(({className}) => icon_path.includes(`_${className}_light`));
             if (paintKit === undefined) {
                 continue;
@@ -463,32 +494,36 @@ export class ItemGenerator {
                 continue;
             }
             const itemKey = `[${paintKit.className}]${baseItem.className}`;
-            const id = this.itemIdentifierManager.get(`paint_${baseItem.def}_${paintKit.index}`);
+                const id = this.itemIdentifierManager.get(`paint_${baseItem.def}_${paintKit.index}`);
             const legacy = this.itemManager.get(id)?.legacy;
-            this.addContainerItem(itemKey, id);
+                this.addContainerItem(itemKey, id);
             this.addTranslation(id, "name", baseItem.nameToken, " | ", paintKit.nameToken);
             this.addTranslation(id, "desc", paintKit.descToken);
-            this.addItem({
-                ...baseItem,
-                ...this.getSkinCollection(id, itemKey),
-                altName: this.getSkinAltName(paintKit.className),
-                base: undefined,
-                baseId: baseItem.id,
-                free: undefined,
-                id,
-                image: this.getSkinImage(id, baseItem.className, paintKit.className),
-                index: Number(paintKit.index),
-                legacy,
-                rarity: this.getRarityColorHex(
-                    MELEE_OR_GLOVES_TYPES.includes(baseItem.type)
-                        ? [baseItem.rarity, paintKit.rarityColorHex]
-                        : [itemKey, paintKit.rarityColorHex]
-                ),
-                wearMax: paintKit.wearMax,
-                wearMin: paintKit.wearMin
-            });
+                this.addItem({
+                    ...baseItem,
+                    ...this.getSkinCollection(id, itemKey),
+                    altName: this.getSkinAltName(paintKit.className),
+                    base: undefined,
+                    baseId: baseItem.id,
+                    free: undefined,
+                    glb: undefined,
+                    id,
+                    image: this.getSkinImage(id, baseItem.className, paintKit.className),
+                    index: Number(paintKit.index),
+                    legacy: (baseItem.type === "weapon" && paintKit.isLegacy) || undefined,
+                    rarity: this.getRarityColorHex(
+                        MELEE_OR_GLOVES_TYPES.includes(baseItem.type)
+                            ? [baseItem.rarity, paintKit.rarityColorHex]
+                            : [itemKey, paintKit.rarityColorHex]
+                    ),
+                    texture:
+                        (await this.getSkinTexture(id, paintKit.className, paintKit.compositeMaterialPath)) ??
+                        ((await exists(resolve(process.cwd(), `assets/textures/${id}.webp`))) || undefined),
+                    wearMax: paintKit.wearMax,
+                    wearMin: paintKit.wearMin
+                });
+            }
         }
-    }
 
     private parseCustomWeaponSets() {
         warning("Parsing weapon sets...");
@@ -553,7 +588,7 @@ export class ItemGenerator {
     private parseMusicKits() {
         warning("Parsing music kits...");
         const baseId = this.createStub("musickit", "#CSGO_musickit_desc");
-        for (const [index, {name, loc_name, loc_description, image_inventory}] of Object.entries(
+        for (const [index, { name, loc_name, loc_description, image_inventory }] of Object.entries(
             this.gameItems.music_definitions
         )) {
             if (index === "2") {
@@ -585,7 +620,7 @@ export class ItemGenerator {
         const baseId = this.createStub("sticker", "#CSGO_Tool_Sticker_Desc");
         for (const [
             index,
-            {name, description_string, item_name, sticker_material, tournament_event_id, item_rarity}
+            { name, description_string, item_name, sticker_material, tournament_event_id, item_rarity }
         ] of Object.entries(this.gameItems.sticker_kits)) {
             if (
                 name === "default" ||
@@ -597,7 +632,7 @@ export class ItemGenerator {
             ) {
                 continue;
             }
-            const [category, categoryToken] = this.getStickerCategory({sticker_material, tournament_event_id});
+            const [category, categoryToken] = this.getStickerCategory({ sticker_material, tournament_event_id });
             const id = this.itemIdentifierManager.get(`sticker_${index}`);
             const itemKey = `[${name}]sticker`;
             this.addContainerItem(itemKey, id);
@@ -624,12 +659,38 @@ export class ItemGenerator {
         }
     }
 
+    private parseKeychains() {
+        warning("Parsing keychains...");
+        const baseId = this.createStub("keychain", "#CSGO_Tool_Keychain_Desc");
+        for (const [index, { name, loc_name, loc_description, item_rarity, image_inventory }] of Object.entries(
+            this.gameItems.keychain_definitions
+        )) {
+            if (!this.hasLocalization(loc_name)) {
+                continue;
+            }
+            const id = this.itemIdentifierManager.get(`keychain_${index}`);
+            const itemKey = `[${name}]keychain`;
+            this.addContainerItem(itemKey, id);
+            this.addLocalization(id, "name", "#CSGO_Tool_Keychain", " | ", loc_name);
+            this.tryAddLocalization(id, "desc", loc_description);
+            this.addItem({
+                baseId,
+                def: 1355,
+                id,
+                image: this.itemManager.get(id)?.image ?? this.getImage(id, image_inventory),
+                index: Number(index),
+                rarity: this.getRarityColorHex([itemKey, item_rarity]),
+                type: CS2ItemType.Keychain
+            });
+        }
+    }
+
     private parseGraffiti() {
         warning("Parsing graffiti...");
         const baseId = this.createStub("graffiti", "#CSGO_Tool_SprayPaint_Desc");
         for (const [
             index,
-            {name, item_name, description_string, sticker_material, item_rarity, tournament_event_id}
+            { name, item_name, description_string, sticker_material, item_rarity, tournament_event_id }
         ] of Object.entries(this.gameItems.sticker_kits)) {
             if (
                 !this.hasTranslation(item_name) ||
@@ -643,7 +704,7 @@ export class ItemGenerator {
             const graffitiName = this.requireTranslation(item_name);
             const itemKey = `[${name}]spray`;
             if (this.defaultGraffitiManager.includes(graffitiName)) {
-                for (const {name: tintName, nameToken: tintNameToken, id: tintId} of this.graffitiTints) {
+                for (const { name: tintName, nameToken: tintNameToken, id: tintId } of this.graffitiTints) {
                     const id = this.itemIdentifierManager.get(`spray_${index}_${tintId}`);
                     const graffitiNameWithTint = `${graffitiName} (${tintName})`;
                     const image =
@@ -695,7 +756,7 @@ export class ItemGenerator {
         const baseId = this.createStub("patch", "#CSGO_Tool_Patch_Desc");
         for (const [
             index,
-            {name, item_name, patch_material, description_string, tournament_event_id, item_rarity}
+            { name, item_name, patch_material, description_string, tournament_event_id, item_rarity }
         ] of Object.entries(this.gameItems.sticker_kits)) {
             if (item_name.indexOf("#PatchKit") !== 0 && patch_material === undefined) {
                 continue;
@@ -771,37 +832,12 @@ export class ItemGenerator {
             });
         }
     }
-    private parseKeychains() {
-        warning("Parsing keychains...");
-        const baseId = this.createStub("keychain", "#CSGO_Tool_Keychain_Desc");
-        for (const [index, { name, loc_name, loc_description, item_rarity, image_inventory }] of Object.entries(
-            this.gameItems.keychain_definitions
-        )) {
-            if (!this.hasTranslation(loc_name)) {
-                continue;
-            }
-            const id = this.itemIdentifierManager.get(`keychain_${index}`);
-            const itemKey = `[${name}]keychain`;
-            this.addContainerItem(itemKey, id);
-            this.addTranslation(id, "name", "#CSGO_Tool_Keychain", " | ", loc_name);
-            this.tryAddTranslation(id, "desc", loc_description);
-            this.addItem({
-                baseId,
-                def: 1355,
-                id,
-                image: this.itemManager.get(id)?.image ?? this.getImage(id, image_inventory),
-                index: Number(index),
-                rarity: this.getRarityColorHex([itemKey, item_rarity]),
-                type: CS2ItemType.Keychain
-            });
-        }
-    }
 
     private parseCollectibles() {
         warning("Parsing collectibles...");
         for (const [
             index,
-            {name, image_inventory, item_name, tool, attributes, item_rarity, item_description}
+            { name, image_inventory, item_name, tool, attributes, item_rarity, item_description }
         ] of Object.entries(this.gameItems.items)) {
             if (
                 image_inventory === undefined ||
@@ -819,7 +855,7 @@ export class ItemGenerator {
             this.addTranslation(id, "name", "#CSGO_Type_Collectible", " | ", item_name);
             this.tryAddTranslation(id, "desc", item_description ?? `${item_name}_Desc`);
             if (attributes?.["tournament event id"] !== undefined) {
-                this.addFormattedTranslation(
+                this.addFormattedLocalization(
                     id,
                     "tournamentDesc",
                     "#CSGO_Event_Desc",
@@ -841,7 +877,7 @@ export class ItemGenerator {
 
     private parseTools() {
         warning("Parsing tools...");
-        for (const [index, {name, baseitem, item_name, image_inventory, prefab, item_description}] of Object.entries(
+        for (const [index, { name, baseitem, item_name, image_inventory, prefab, item_description }] of Object.entries(
             this.gameItems.items
         )) {
             if (
@@ -930,7 +966,6 @@ export class ItemGenerator {
         ] of Object.entries(this.gameItems.items)) {
             const hasSupplyCrateSeries =
                 attributes?.["set supply crate series"]?.attribute_class === "supply_crate_series";
-
             if (
                 item_name === undefined ||
                 image_inventory === undefined ||
@@ -971,17 +1006,17 @@ export class ItemGenerator {
                 // Asserts if the container requires a key.
                 assert(
                     associated_items !== undefined ||
-                    prefab === "sticker_capsule" ||
-                    prefab === "weapon_case_souvenirpkg" ||
-                    thePrefab?.prefab === "weapon_case_souvenirpkg" ||
-                    tags?.StickerCapsule ||
-                    name.includes("crate_signature") ||
-                    name.includes("crate_pins") ||
-                    name.includes("crate_musickit") ||
-                    name.includes("crate_patch") ||
-                    name.includes("crate_sprays") ||
-                    name.includes("selfopeningitem") ||
-                    prefab?.includes("selfopening")
+                        prefab === "sticker_capsule" ||
+                        prefab === "weapon_case_souvenirpkg" ||
+                        thePrefab?.prefab === "weapon_case_souvenirpkg" ||
+                        tags?.StickerCapsule ||
+                        name.includes("crate_signature") ||
+                        name.includes("crate_pins") ||
+                        name.includes("crate_musickit") ||
+                        name.includes("crate_patch") ||
+                        name.includes("crate_sprays") ||
+                        name.includes("selfopeningitem") ||
+                        prefab?.includes("selfopening")
                 );
                 const hasSouvenirStickers =
                     (attributes?.["tournament event id"]?.attribute_class === "tournament_event_id" && !isNaN(Number(attributes?.["tournament event id"].value)) && Number(attributes?.["tournament event id"].value) >= 0 && (prefab === "weapon_case_souvenirpkg" || thePrefab?.prefab === "weapon_case_souvenirpkg"))
@@ -989,7 +1024,7 @@ export class ItemGenerator {
                     if (keyItems.has(keyItemDef)) {
                         return ensure(keyItems.get(keyItemDef));
                     }
-                    const {item_name, item_description, image_inventory} = this.gameItems.items[keyItemDef];
+                    const { item_name, item_description, image_inventory } = this.gameItems.items[keyItemDef];
                     assert(image_inventory);
                     const id = this.itemIdentifierManager.get(`key_${keyItemDef}`);
                     const nameToken = item_name ?? "#CSGO_base_crate_key";
@@ -1172,6 +1207,10 @@ export class ItemGenerator {
             const path = format(LOCALIZATIONS_JSON_PATH, language);
             writeJson(path, translations);
             warning(`Generated '${path}'.`);
+
+            const tsPath = format(LOCALIZATIONS_TS_PATH, language);
+            write(tsPath, useLocalizationTemplate(language, translations));
+            warning(`Generated '${tsPath}'.`);
         }
 
         writeJson(PARSED_ITEMS_GAME_PATH, this.gameItems);
@@ -1185,6 +1224,15 @@ export class ItemGenerator {
 
         write(ITEMS_TS_PATH, useItemsTemplate(items));
         warning(`Generated '${ITEMS_TS_PATH}'.`);
+
+        if (Object.keys(this.stickerMarkup).length > 0) {
+            writeJson(STICKER_MARKUP_JSON_PATH, this.stickerMarkup);
+            warning(`Generated '${STICKER_MARKUP_JSON_PATH}'.`);
+
+            write(STICKER_MARKUP_TS_PATH, useStickerMarkupTemplate(this.stickerMarkup));
+            warning(`Generated '${STICKER_MARKUP_TS_PATH}'.`);
+        }
+
         warning("Script completed.");
     }
 
@@ -1397,6 +1445,12 @@ export class ItemGenerator {
         return this.getImage(id, paths[0][0].replace("_png.png", ""));
     }
 
+    private hasSkinImage(className?: string, paintClassName?: string) {
+        return existsSync(
+            resolve(IMAGES_PATH, `econ/default_generated/${className}_${paintClassName}_light_png.png`.toLowerCase())
+        );
+    }
+
     private getSkinAltName(className: string) {
         switch (true) {
             case className.includes("_phase"):
@@ -1415,9 +1469,9 @@ export class ItemGenerator {
     }
 
     private getStickerCategory({
-                                   sticker_material,
-                                   tournament_event_id
-                               }: {
+        sticker_material,
+        tournament_event_id
+    }: {
         sticker_material: string;
         tournament_event_id?: string;
     }) {
@@ -1561,7 +1615,7 @@ export class ItemGenerator {
             this.tryAddTranslation(itemId, "collectionName", itemSet.name);
             this.tryAddTranslation(itemId, "collectionDesc", itemSet.set_description);
         }
-        return {collection};
+        return { collection };
     }
 
     private getSkinCollection(itemId: number, itemKey: string) {
@@ -1620,6 +1674,145 @@ export class ItemGenerator {
             return true;
         }
         return undefined;
+    }
+
+    private async findStickerMarkup(itemDef?: string, modelPath?: string) {
+        try {
+            if (itemDef === undefined || modelPath === undefined || !this.cs2.active) {
+                return;
+            }
+            modelPath = modelPath.replace(".vmdl", ".vmdl_c");
+            const output = (
+                await this.cs2.decompile({
+                    vpkFilepath: modelPath,
+                    block: "DATA"
+                })
+            ).split(`--- Data for block "DATA" ---`)[1];
+            const data = CS2KeyValues3.parse<{
+                StickerMarkup: {
+                    Index: number;
+                    LegacyModel: boolean;
+                    Offset: number[];
+                    Rotation: number;
+                    Scale: number;
+                }[];
+            }>(
+                CS2KeyValues3.parse<{
+                    m_modelInfo: {
+                        m_keyValueText: string;
+                    };
+                }>(output).m_modelInfo.m_keyValueText
+            );
+            this.stickerMarkup[itemDef] = data.StickerMarkup.map(
+                ({ Index: slot, LegacyModel: legacy, Offset: offsets, Rotation: rotation, Scale: scale }) => ({
+                    slot,
+                    legacy,
+                    offsets,
+                    rotation,
+                    scale
+                })
+            );
+        } catch (error) {
+            console.log(`Unable to get sticker markup for ${modelPath}`);
+        }
+    }
+
+    private async getTexturePathFromCompositeMaterial(compositeMaterialPath?: string) {
+        try {
+            if (compositeMaterialPath === undefined) {
+                return undefined;
+            }
+            return ensure(
+                CS2KeyValues3.parse<{
+                    m_Points: {
+                        m_vecCompositeMaterialAssemblyProcedures: {
+                            m_vecCompositeInputContainers: {
+                                m_strAlias: string;
+                                m_vecLooseVariables: {
+                                    m_strName: string;
+                                    m_strTextureRuntimeResourcePath: string;
+                                }[];
+                            }[];
+                        }[];
+                    }[];
+                }>(
+                    (
+                        await this.cs2.decompile({
+                            vpkFilepath: compositeMaterialPath,
+                            block: "DATA"
+                        })
+                    ).split(`--- Data for block "DATA" ---`)[1]
+                )
+                    .m_Points[0].m_vecCompositeMaterialAssemblyProcedures[0].m_vecCompositeInputContainers.find(
+                        ({ m_strAlias }) => m_strAlias === "exposed_params"
+                    )
+                    ?.m_vecLooseVariables.find(({ m_strName }) => m_strName === "g_tPattern")
+                    ?.m_strTextureRuntimeResourcePath.split(":")[1]
+            );
+        } catch {
+            console.log(`Unable to get texture path from ${compositeMaterialPath}.`);
+            return undefined;
+        }
+    }
+
+    private async getTexturePathFromMaterial(materialPath: string) {
+        return ensure(
+            CS2KeyValues3.parse<{
+                m_textureParams: { m_name: string; m_pValue: string }[];
+            }>(
+                (
+                    await this.cs2.decompile({
+                        vpkFilepath: materialPath,
+                        block: "DATA"
+                    })
+                ).split(`--- Data for block "DATA" ---`)[1]
+            ).m_textureParams.find(({ m_name }) => m_name === "g_tPattern")
+        ).m_pValue.split(":")[1];
+    }
+
+    private async getSkinTexture(id: number, materialName: string, compositeMaterialPath?: string) {
+        try {
+            if (!this.cs2.active) {
+                return undefined;
+            }
+            const materialFilename = `${materialName}.vmat_c`;
+            const materialPath = `materials/models/weapons/customization/paints/vmats/${materialFilename}`;
+            const texturePath =
+                (await this.getTexturePathFromCompositeMaterial(compositeMaterialPath)) ??
+                (await this.getTexturePathFromMaterial(materialPath));
+            if (
+                !texturePath.startsWith("materials/models/weapons/customization/paints/custom") &&
+                !texturePath.startsWith("items/assets/paintkits") &&
+                !texturePath.startsWith("materials/models/weapons/customization/paints/gunsmith")
+            ) {
+                console.log(`Ignoring texture path ${texturePath}`);
+                return undefined;
+            }
+            await this.cs2.decompile({
+                vpkFilepath: texturePath,
+                decompile: true,
+                output: DECOMPILED_PATH
+            });
+            const decompiledPath = resolve(DECOMPILED_PATH, texturePath.replace(".vtex", ".png"));
+            const { data, info } = await sharp(decompiledPath)
+                .removeAlpha()
+                .png()
+                .raw()
+                .toBuffer({ resolveWithObject: true });
+
+            await sharp(data, {
+                raw: { width: info.width, height: info.height, channels: 3 }
+            })
+                .resize(1024, 1024)
+                .webp()
+                .toFile(resolve(process.cwd(), `assets/textures/${id}.webp`));
+
+            await unlink(decompiledPath);
+            return true;
+        } catch (error) {
+            console.log(`Unable to get skin texture for ${materialName} (id: ${id})`);
+            return undefined;
+        }
     }
 
     getContainerType(name?: string, type?: CS2ItemTypeValues) {

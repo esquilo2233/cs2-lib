@@ -13,12 +13,14 @@ import {
     CS2_MACHINEGUN_MODELS,
     CS2_MAX_FACTORY_NEW_WEAR,
     CS2_MAX_FIELD_TESTED_WEAR,
+    CS2_MAX_KEYCHAIN_SEED,
     CS2_MAX_MINIMAL_WEAR_WEAR,
     CS2_MAX_SEED,
     CS2_MAX_STATTRAK,
     CS2_MAX_WEAR,
     CS2_MAX_WELL_WORN_WEAR,
     CS2_MIDTIER_CATEGORIES,
+    CS2_MIN_KEYCHAIN_SEED,
     CS2_MIN_SEED,
     CS2_MIN_STATTRAK,
     CS2_MIN_WEAR,
@@ -90,12 +92,24 @@ function filterItems(predicate: CS2EconomyItemPredicate): (item: CS2EconomyItem)
 }
 
 export class CS2EconomyInstance {
+    baseUrl = "https://cdn.statically.io/gh/ianlucas/cs2-lib/main/assets";
     categories = new Set<string>();
     items = new Map<number, CS2EconomyItem>();
     itemsAsArray: CS2EconomyItem[] = [];
     stickers = new Set<CS2EconomyItem>();
 
-    use({ items, language }: { items: CS2Item[]; language: CS2ItemLocalizationMap }) {
+    use({
+        assetsBaseUrl,
+        items,
+        language
+    }: {
+        assetsBaseUrl?: string;
+        items: CS2Item[];
+        language: CS2ItemLocalizationMap;
+    }) {
+        if (assetsBaseUrl !== undefined) {
+            this.baseUrl = assetsBaseUrl;
+        }
         this.categories.clear();
         this.items.clear();
         this.stickers.clear();
@@ -133,7 +147,7 @@ export class CS2EconomyInstance {
         if (wear === undefined) {
             return true;
         }
-        assert(!Number.isNaN(wear));
+        assert(Number.isFinite(wear));
         assert(String(wear).length <= String(CS2_WEAR_FACTOR).length);
         assert(wear >= CS2_MIN_WEAR && wear <= CS2_MAX_WEAR);
         if (item !== undefined) {
@@ -152,10 +166,10 @@ export class CS2EconomyInstance {
         if (seed === undefined) {
             return true;
         }
-        assert(!Number.isNaN(seed));
-        assert(item === undefined || item.hasSeed());
+        assert(Number.isFinite(seed));
         assert(Number.isInteger(seed));
-        assert(seed >= CS2_MIN_SEED && seed <= CS2_MAX_SEED);
+        assert(item === undefined || item.hasSeed());
+        assert(seed >= (item?.getMinimumSeed() ?? CS2_MIN_SEED) && seed <= (item?.getMaximumSeed() ?? CS2_MAX_SEED));
         return true;
     }
 
@@ -309,6 +323,7 @@ export class CS2EconomyItem
     def: number | undefined;
     desc: string | undefined;
     free: boolean | undefined;
+    glb: boolean | undefined;
     id: number = null!;
     image: string | undefined;
     index: number | undefined;
@@ -323,6 +338,7 @@ export class CS2EconomyItem
     specialsImage: boolean | undefined;
     statTrakless: boolean | undefined;
     statTrakOnly: boolean | undefined;
+    texture: boolean | undefined;
     tint: number | undefined;
     tournamentDesc: string | undefined;
     type: CS2ItemTypeValues = null!;
@@ -469,10 +485,7 @@ export class CS2EconomyItem
         return this.type === CS2ItemType.Graffiti;
     }
 
-    isKeychain(): boolean {
-        return this.type === CS2ItemType.Keychain;
-    }
-
+   
     isMelee(): boolean {
         return this.type === CS2ItemType.Melee;
     }
@@ -487,6 +500,10 @@ export class CS2EconomyItem
 
     isSticker(): boolean {
         return this.type === CS2ItemType.Sticker;
+    }
+
+    isKeychain(): boolean {
+        return this.type === CS2ItemType.Keychain;
     }
 
     isStub(): boolean {
@@ -538,6 +555,7 @@ export class CS2EconomyItem
         assert(this.isSticker());
         return this;
     }
+
     expectKeychain(): this {
         assert(this.isKeychain());
         return this;
@@ -641,6 +659,49 @@ export class CS2EconomyItem
         return CS2_PAINTABLE_ITEMS.includes(this.type);
     }
 
+    getImage(wear?: number): string {
+        if (this.hasWear() && wear !== undefined) {
+            switch (true) {
+                case wear < 1 / 3:
+                    return `${this.economy.baseUrl}/images/${this.id}_light.png`;
+                case wear < 2 / 3:
+                    return `${this.economy.baseUrl}/images/${this.id}_medium.png`;
+                default:
+                    return `${this.economy.baseUrl}/images/${this.id}_heavy.png`;
+            }
+        }
+        if (this.image === undefined) {
+            return `${this.economy.baseUrl}/images/${this.id}.png`;
+        }
+        if (this.image.charAt(0) === "/") {
+            return `${this.economy.baseUrl}/images${this.image}`;
+        }
+        return this.image;
+    }
+
+    getCollectionImage(): string {
+        return `${this.economy.baseUrl}/images/${ensure(this.collection)}.png`;
+    }
+
+    getSpecialsImage(): string {
+        this.expectContainer();
+        assert(this.rawSpecials);
+        return this.specialsImage
+            ? `${this.economy.baseUrl}/images/${this.id}_rare.png`
+            : `${this.economy.baseUrl}/images/default_rare_item.png`;
+    }
+
+    getTextureImage(): string {
+        assert(this.texture);
+        return `${this.economy.baseUrl}/textures/${this.id}.webp`;
+    }
+
+    getModelBinary(): string {
+        const { glb, def } = this.parent ?? this;
+        assert(glb);
+        return `${this.economy.baseUrl}/models/${def}.glb`;
+    }
+
     getMinimumWear(): number {
         return this.wearMin ?? CS2_MIN_WEAR;
     }
@@ -648,10 +709,18 @@ export class CS2EconomyItem
     getMaximumWear(): number {
         return this.wearMax ?? CS2_MAX_WEAR;
     }
+
+    getMinimumSeed(): number {
+        return this.isKeychain() ? CS2_MIN_KEYCHAIN_SEED : CS2_MIN_SEED;
+    }
+
+    getMaximumSeed(): number {
+        return this.isKeychain() ? CS2_MAX_KEYCHAIN_SEED : CS2_MAX_SEED;
+    }
+
     getMaximumUses(): number {
         return this.maxUses ?? CS2_MAX_USES;
     }
-
     groupContents(): Record<string, CS2EconomyItem[]> {
         const items: Record<string, CS2EconomyItem[]> = {};
         const specials = this.specials;

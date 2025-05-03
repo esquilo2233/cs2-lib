@@ -3,8 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type {CS2RarityColorValues, CS2RaritySoundNameValues} from "./economy-container.js";
-import type {EnumValues} from "./utils.js";
+import type { CS2RarityColorValues, CS2RaritySoundNameValues } from "./economy-container.js";
+import type { EnumValues } from "./utils.js";
 
 export const CS2ItemTeam = {
     T: 0,
@@ -66,6 +66,7 @@ export interface CS2Item {
     contents?: number[] | undefined;
     def?: number | undefined;
     free?: boolean | undefined;
+    glb?: boolean;
     id: number;
     image?: string | undefined;
     index?: number | undefined;
@@ -81,6 +82,7 @@ export interface CS2Item {
     statTrakless?: boolean | undefined;
     statTrakOnly?: boolean | undefined;
     teams?: CS2ItemTeamValues | undefined;
+    texture?: boolean;
     tint?: number | undefined;
     type: CS2ItemTypeValues;
     voFallback?: boolean | undefined;

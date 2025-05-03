@@ -4,24 +4,25 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
-    CS2_AIRBLOWER_USES_FACTOR,
-    CS2_MAX_KEYCHAIN_SEED,
     CS2_MAX_KEYCHAINS,
+    CS2_MAX_KEYCHAIN_SEED,
     CS2_MAX_PATCHES,
     CS2_MAX_STATTRAK,
-    CS2_MAX_STICKER_WEAR,
     CS2_MAX_STICKERS,
+    CS2_MAX_STICKER_ROTATION,
+    CS2_MAX_STICKER_WEAR,
     CS2_MAX_WEAR,
     CS2_MIN_KEYCHAIN_SEED,
     CS2_MIN_STICKER_WEAR,
     CS2_MIN_WEAR,
+    CS2_AIRBLOWER_USES_FACTOR,
     CS2_STICKER_WEAR_FACTOR
 } from "./economy-constants.js";
-import {CS2ItemType, type CS2ItemTypeValues, type CS2UnlockedItem} from "./economy-types.js";
-import {CS2Economy, CS2EconomyInstance, CS2EconomyItem} from "./economy.js";
-import {resolveInventoryData} from "./inventory-upgrader.js";
-import {CS2Team, type CS2TeamValues} from "./teams.js";
-import {assert, ensure, float, type Interface, type MapValue, type RecordValue} from "./utils.js";
+import { CS2ItemType, type CS2ItemTypeValues, type CS2UnlockedItem } from "./economy-types.js";
+import { CS2Economy, CS2EconomyInstance, CS2EconomyItem } from "./economy.js";
+import { resolveInventoryData } from "./inventory-upgrader.js";
+import { CS2Team, type CS2TeamValues } from "./teams.js";
+import { type Interface, type MapValue, type RecordValue, assert, ensure, float } from "./utils.js";
 
 export interface CS2BaseInventoryItem {
     containerId?: number;
@@ -47,6 +48,7 @@ export interface CS2BaseInventoryItem {
         string,
         {
             id: number;
+            rotation?: number;
             wear?: number;
             x?: number;
             y?: number;
@@ -130,7 +132,8 @@ export class CS2Inventory {
         const entries = Object.entries(stickers);
         assert(entries.length <= CS2_MAX_STICKERS);
         assert(item === undefined || item.hasStickers());
-        for (const [key, { id: stickerId, wear }] of entries) {
+        // @todo: validate x and y offsets, for now apps must implement it on their own.
+        for (const [key, { id: stickerId, wear, rotation, x, y }] of entries) {
             const slot = parseInt(key, 10);
             assert(slot >= 0 && slot <= CS2_MAX_STICKERS - 1);
             this.economy.getById(stickerId).expectSticker();
@@ -138,6 +141,17 @@ export class CS2Inventory {
                 assert(!Number.isNaN(wear));
                 assert(String(wear).length <= String(CS2_STICKER_WEAR_FACTOR).length);
                 assert(wear >= CS2_MIN_STICKER_WEAR && wear <= CS2_MAX_STICKER_WEAR);
+            }
+            if (rotation !== undefined) {
+                assert(Number.isFinite(rotation));
+                assert(Number.isInteger(rotation));
+                assert(String(rotation).length <= String(CS2_MAX_STICKER_ROTATION).length);
+            }
+            if (x !== undefined) {
+                assert(Number.isFinite(x));
+            }
+            if (y !== undefined) {
+                assert(Number.isFinite(y));
             }
         }
     }
@@ -149,13 +163,20 @@ export class CS2Inventory {
         const entries = Object.entries(keychains);
         assert(entries.length <= CS2_MAX_KEYCHAINS);
         assert(item === undefined || item.hasKeychains());
-        for (const [key, { id: keychainId, seed }] of entries) {
+        // @todo: validate x and y offsets, for now apps must implement it on their own.
+        for (const [key, { id: keychainId, seed, x, y }] of entries) {
             const slot = parseInt(key, 10);
             assert(slot >= 0 && slot <= CS2_MAX_KEYCHAINS - 1);
             this.economy.getById(keychainId).expectKeychain();
             if (seed !== undefined) {
                 assert(!Number.isNaN(seed));
                 assert(seed >= CS2_MIN_KEYCHAIN_SEED && seed <= CS2_MAX_KEYCHAIN_SEED);
+            }
+            if (x !== undefined) {
+                assert(Number.isFinite(x));
+            }
+            if (y !== undefined) {
+                assert(Number.isFinite(y));
             }
         }
     }
@@ -207,7 +228,7 @@ export class CS2Inventory {
         this.validateAddable(item);
         this.validatePatches(patches, item);
         this.validateStickers(stickers, item);
-        this.validateKeychains(keychains, item)
+        this.validateKeychains(keychains, item);
     }
 
     private toInventoryItems(items: Record<number, CS2BaseInventoryItem>): Map<number, CS2InventoryItem> {
@@ -648,8 +669,7 @@ export class CS2InventoryItem
     price: number | undefined; 
     userId: string | undefined;
 
-    private assign({ keychains, patches, stickers, storage }:
-Partial<CS2BaseInventoryItem>): void {
+    private assign({ keychains, patches, stickers, storage }: Partial<CS2BaseInventoryItem>): void {
         if (patches !== undefined) {
             this.patches = new Map(
                 Object.entries(patches)
@@ -660,7 +680,7 @@ Partial<CS2BaseInventoryItem>): void {
         if (stickers !== undefined) {
             this.stickers = new Map(
                 Object.entries(stickers)
-                    .filter(([, {id}]) => this.economy.items.has(id))
+                    .filter(([, { id }]) => this.economy.items.has(id))
                     .map(([slot, sticker]) => [parseInt(slot, 10), sticker])
             );
         }
@@ -781,6 +801,10 @@ Partial<CS2BaseInventoryItem>): void {
         return this.keychains?.get(slot)?.seed ?? CS2_MIN_KEYCHAIN_SEED;
     }
 
+    override getImage(wear?: number): string {
+        return super.getImage(wear ?? this.getWear());
+    }
+
     asBase(): CS2BaseInventoryItem {
         return {
             containerId: this.containerId,
@@ -788,6 +812,7 @@ Partial<CS2BaseInventoryItem>): void {
             equippedCT: this.equippedCT,
             equippedT: this.equippedT,
             id: this.id,
+            keychains: this.keychains !== undefined ? Object.fromEntries(this.keychains) : undefined,
             nameTag: this.nameTag,
             patches: this.patches !== undefined ? Object.fromEntries(this.patches) : undefined,
             seed: this.seed,

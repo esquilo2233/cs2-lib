@@ -101,6 +101,16 @@ export type CS2GameItems = {
                 max_uses?: string;
             };
         };
+        keychain_definitions: {
+            [keychainIndex: string]: {
+                name: string;
+                loc_name: string;
+                loc_description: string;
+                item_rarity: string;
+                image_inventory: string;
+                pedestal_display_model: string;
+            };
+        };
         music_definitions: {
             [musicIndex: string]: {
                 image_inventory: string;
@@ -111,9 +121,11 @@ export type CS2GameItems = {
         };
         paint_kits: {
             [paintKitKey: string]: {
+                composite_material_path?: string;
                 description_string?: string;
                 description_tag?: string;
                 name?: string;
+                use_legacy_model?: string;
                 wear_remap_max?: string;
                 wear_remap_min?: string;
             };
@@ -129,6 +141,7 @@ export type CS2GameItems = {
                       item_description?: string;
                       item_name: string;
                       item_rarity: string;
+                      model_player?: string;
                       prefab: string;
                       used_by_classes: Record<string, string>;
                       visuals: {
@@ -164,8 +177,8 @@ export type CS2GameItems = {
                 component_quantity?: string;
                 component_list: {
                     [component_index: string]: string;
-                };
             };
+        };
         }
     };
 };
