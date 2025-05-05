@@ -831,7 +831,6 @@ export class CS2InventoryItem
             sellable: this.sellable !== undefined ? this.sellable : undefined,
             tradable: this.tradable !== undefined ? this.tradable : undefined,
             recyclable: this.recyclable !== undefined ? this.recyclable : undefined,
-            keychains: this.keychains !== undefined ? Object.fromEntries(this.keychains) : undefined,
             souvenir: this.souvenir !== undefined ? this.souvenir : undefined,
         } satisfies Interface<CS2BaseInventoryItem>;
     }
