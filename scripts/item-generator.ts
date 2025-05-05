@@ -15,10 +15,10 @@ import {
     CS2ContainerType,
     CS2ItemTeam,
     CS2ItemLocalization,
-    CS2ItemLocalizationByLanguage,
-    CS2ItemTeam,
+    CS2ItemTranslationByLanguage,
     CS2ItemType,
-    CS2ItemTypeValues
+    CS2ItemTypeValues,
+    CS2StickerMarkup
 
 } from "../src/economy-types.js";
 import { CS2KeyValues } from "../src/keyvalues.js";
@@ -28,7 +28,7 @@ import { ContainerScraper } from "./container-scraper.js";
 import { CS2_CSGO_PATH } from "./env.js";
 import { ExternalCS2 } from "./external-cs2.js";
 import { HARDCODED_SPECIALS } from "./item-generator-specials.js";
-import { useItemsTemplate, useStickerMarkupTemplate, useLocalizationTemplate } from "./item-generator-templates.js";
+import { useItemsTemplate, useStickerMarkupTemplate, useTranslationTemplate } from "./item-generator-templates.js";
 import { CS2ExportItem, CS2ExtendedItem, CS2GameItems, CS2Language } from "./item-generator-types.js";
 import { exists, prependHash, readJson, shouldRun, warning, write, writeJson } from "./utils.js";
 import {BlueprintCase} from "./blueprint-case";
@@ -107,7 +107,7 @@ export class ItemGenerator {
     gameItemsCustom: CS2GameItems["items_game"] = null!;
 
     private csgoLocalizationByLanguage: Record<string, CS2Language["lang"]["Tokens"]> = null!;
-    private itemLocalizationByLanguage: CS2ItemLocalizationByLanguage = null!;
+    private itemLocalizationByLanguage: CS2ItemTranslationByLanguage = null!;
     private itemNames = new Map<number, string>();
     private itemSetItemKey: Record<string, string | undefined> = null!;
     private itemsRaritiesColorHex: typeof this.raritiesColorHex = null!;
@@ -311,7 +311,7 @@ export class ItemGenerator {
             .filter(isNotUndefined);
         this.graffitiTints = Object.values(this.gameItems.graffiti_tints).map(({ id }) => ({
             id: Number(id),
-            name: this.requireLocalization(`#Attrib_SprayTintValue_${id}`),
+            name: this.requireTranslation(`#Attrib_SprayTintValue_${id}`),
             nameToken: `#Attrib_SprayTintValue_${id}`
         }));
         this.itemSetItemKey = Object.fromEntries(
@@ -477,7 +477,7 @@ export class ItemGenerator {
         }
     }
 
-    private parseSkins() {
+    private async parseSkins() {
         warning("Parsing skins...");
         for (const {icon_path} of Object.values(this.gameItems.alternate_icons2.weapon_icons)) {
             if (!LIGHT_ICON_RE.test(icon_path)) {
@@ -665,14 +665,14 @@ export class ItemGenerator {
         for (const [index, { name, loc_name, loc_description, item_rarity, image_inventory }] of Object.entries(
             this.gameItems.keychain_definitions
         )) {
-            if (!this.hasLocalization(loc_name)) {
+            if (!this.hasTranslation(loc_name)) {
                 continue;
             }
             const id = this.itemIdentifierManager.get(`keychain_${index}`);
             const itemKey = `[${name}]keychain`;
             this.addContainerItem(itemKey, id);
-            this.addLocalization(id, "name", "#CSGO_Tool_Keychain", " | ", loc_name);
-            this.tryAddLocalization(id, "desc", loc_description);
+            this.addTranslation(id, "name", "#CSGO_Tool_Keychain", " | ", loc_name);
+            this.tryAddTranslation(id, "desc", loc_description);
             this.addItem({
                 baseId,
                 def: 1355,
@@ -855,7 +855,7 @@ export class ItemGenerator {
             this.addTranslation(id, "name", "#CSGO_Type_Collectible", " | ", item_name);
             this.tryAddTranslation(id, "desc", item_description ?? `${item_name}_Desc`);
             if (attributes?.["tournament event id"] !== undefined) {
-                this.addFormattedLocalization(
+                this.addFormattedTranslation(
                     id,
                     "tournamentDesc",
                     "#CSGO_Event_Desc",
@@ -1209,7 +1209,7 @@ export class ItemGenerator {
             warning(`Generated '${path}'.`);
 
             const tsPath = format(LOCALIZATIONS_TS_PATH, language);
-            write(tsPath, useLocalizationTemplate(language, translations));
+            write(tsPath, useTranslationTemplate(language, translations));
             warning(`Generated '${tsPath}'.`);
         }
 
