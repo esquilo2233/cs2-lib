@@ -101,16 +101,6 @@ export type CS2GameItems = {
                 max_uses?: string;
             };
         };
-        keychain_definitions: {
-            [keychainIndex: string]: {
-                name: string;
-                loc_name: string;
-                loc_description: string;
-                item_rarity: string;
-                image_inventory: string;
-                pedestal_display_model: string;
-            };
-        };
         music_definitions: {
             [musicIndex: string]: {
                 image_inventory: string;
@@ -187,6 +177,8 @@ export type CS2ExtendedItem = CS2Item & {
     className?: string;
     descToken?: string;
     nameToken?: string;
+    uses?: number;
+    maxUses?: number;
 };
 
 export type CS2ExportItem = CS2Item & {

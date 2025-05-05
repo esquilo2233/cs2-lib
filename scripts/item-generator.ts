@@ -578,7 +578,10 @@ export class ItemGenerator {
                     parentPaintkitId: paintKit?.index,
                     type: CS2ItemType.Blueprint
                 });
-                if (blueprintName !== undefined) blueprintCaseItems.push(blueprintName)
+                if (blueprintName !== undefined){
+                    blueprintCaseItems.push(blueprintName);
+                }
+                    
             }
         }
 
